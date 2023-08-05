@@ -5,6 +5,19 @@ import * as wgballs from "@goodtools/wiregasm/dist/wiregasm";
 
 import * as fs from "fs";
 import Long from "long";
+import * as pbjs from "protobufjs";
+
+import CmdIds from "./CmdIds.json"
+
+const root = pbjs.loadSync("protos/StarRail.proto");
+
+
+function stringify(...obj: any){
+    return JSON.stringify(obj, (key, value) =>
+    { return typeof value === 'bigint'
+    ? value.toString()
+    : value instanceof Long ? value.toString() : value}, 2);
+}
 
 function EmVecToArr<T>(vec: Vector<T>): T[] {
     let arr : T[] = [];
@@ -62,7 +75,7 @@ async function main() {
         frames.push(frameObj);
     }
 
-    fs.writeFileSync("frames.json", JSON.stringify(frames, null, 2));
+    fs.writeFileSync("frames.json", stringify(frames));
     wg.destroy();
 }
 
@@ -110,6 +123,10 @@ function parseKcpPacket(buf: Buffer){
             if(typeof v === "bigint"){
                 value = v;
             }
+
+            if(v instanceof Long){
+                value = BigInt(v.toString());
+            }
             if(value > 10000000000n){
                 console.log(value)
                 let key = MTKey.fromSeedSingleSeed(BigInt(value)).keybytes;
@@ -129,17 +146,40 @@ function parseKcpPacket(buf: Buffer){
         let dataLen = xored.readUInt32BE(8);
 
         if(packetHeaderLen + dataLen + 16 != xored.length){
-            console.log("%s, %s",packetHeaderLen + dataLen + 16 , xored.length);
+            // console.log("%s, %s",packetHeaderLen + dataLen + 16 , xored.length);
         }
         let dataSlice = xored.subarray(12 + packetHeaderLen, 12 + packetHeaderLen + dataLen);
 
-        let obj = parseProtoIsh(dataSlice);
+        let obj = parseProto(cmdId, dataSlice);
 
-        console.log(`cmdId: ${cmdId}, obj: ${JSON.stringify(obj)}`)
+        console.log(`cmdId: ${CmdIds[cmdId]}, obj: ${stringify(obj)}`)
         lastPack = obj;
     };
 }
 
+
+
+function parseProto(cmdId: number, buf: Buffer){
+    if(CmdIds[cmdId] && cmdId != 0){
+        let protoName = CmdIds[cmdId];
+        try{
+            var proto = root.lookupType(protoName);
+        }catch(e){
+            console.log(`proto ${protoName} not found`);
+            return parseProtoIsh(buf);
+        }
+        let message = proto.decode(buf);
+        let obj = proto.toObject(message, {
+            longs: Long,
+            enums: String,
+            bytes: String,
+        });
+        return obj;
+    }else{
+        return parseProtoIsh(buf);
+    }
+}
+    
 
 function parseProtoIsh(buf:Buffer){
     const reader = new BufferReader(buf);
@@ -180,7 +220,7 @@ function parseProtoIsh(buf:Buffer){
                 break;
         }
 
-        console.log(reader.pos, reader.len)
+        // console.log(reader.pos, reader.len)
     }
 
     return obj;
@@ -191,8 +231,13 @@ function getFrames(){
     let frames = JSON.parse(fs.readFileSync("frames.json", "utf8"));
 
 
-    return frames.map(x=>Buffer.from(x.data_sources[0].data, "base64"));
+    return frames.map((x: any) =>Buffer.from(x.data_sources[0].data, "base64"));
 }
+
+
+
+
+
 
 
 
