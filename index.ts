@@ -41,7 +41,7 @@ function EmVecToArr<T>(vec: Vector<T>): T[] {
     return arr;
 }
 
-const pcapFile = fs.readFileSync("starrail1.2networkdumpone.pcap");
+const pcapFile = fs.readFileSync("ignorelol/starrail1.2networkdumpone.pcap");
 const buildTestOverrides = () => {
     return {
       locateFile: (path : string, prefix : string) => {
@@ -334,6 +334,10 @@ class TrafficInstance{
                     break;
             }
         }else{
+            if(!this.clientKcp || !this.serverKcp){
+                //no handshake etc yet, so ignore everything
+                return;
+            }
             this.clientPort == sourceport ? this.clientKcp.input(data) : this.serverKcp.input(data);
             let shouldContinue = true;
             while(shouldContinue){
@@ -412,7 +416,7 @@ async function main2() {
     let ignored = ["PlayerHeartBeatScRsp", "PlayerHeartBeatCsReq", "SceneEntityMoveCsReq", "SceneEntityMoveScRsp"]
 
     let traffic = new TrafficInstance((obj:TrafficPacket)=>{
-        console.log(`seq: ${obj.seq.toString().padStart(5)}, cmdId: ${CmdIds[obj.cmdId]}`)
+        console.log(`seq: ${obj.seq.toString().padStart(5)}, cmdId: ${CmdIds[obj.cmdId]}, obj ${stringify(obj.obj)}`)
 
         if(CmdIds[obj.cmdId] && ignored.includes(CmdIds[obj.cmdId])){
             return;
@@ -451,6 +455,6 @@ async function main2() {
     })
 }
 
-// main2();
+main2();
 
-main1();
+// main1();
