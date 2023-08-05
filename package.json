@@ -1,0 +1,20 @@
+{
+  "name": "proto",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "npx ts-node test.ts",
+    "index": "npx ts-node index.ts"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@goodtools/wiregasm": "^1.2.0",
+    "@types/node": "^20.4.4",
+    "cap": "^0.2.1",
+    "denque": "^2.1.0",
+    "long": "^5.2.3",
+    "protobufjs": "^7.2.4"
+  }
+}
