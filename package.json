@@ -4,8 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "npx ts-node test.ts",
-    "index": "npx ts-node index.ts"
+    "test": "npx ts-node src/test.ts",
+    "index": "npx ts-node src/index.ts"
   },
   "author": "",
   "license": "MIT",
