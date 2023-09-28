@@ -11,12 +11,39 @@ import * as pbjs from "protobufjs";
 import{ WebSocketServer } from "ws";
 import { Kcp } from "./kcp";
 import MTKey from "./bf/mtkey";
+import "./bf/bruteforce"
+import crypto from "crypto";
+
 
 
 function getFile(name: string) {
     return fs.readFileSync(path.join(__dirname, name));
 }
 
+
+function loadRsaKeys(){
+    let location = "../data/ys/RSAKeys.js";
+    let keys = eval(getFile(location).toString());
+
+    let keyArr: {privateKey : string, decrypt: (b:Buffer)=>Buffer}[] = [];
+    for(let k of keys){
+        //xml 
+        let key = {
+            privateKey : k,
+            decrypt : (buffer: Buffer) => {
+                return crypto.privateDecrypt(
+                    {
+                        key: k,
+                        padding: crypto.constants.RSA_PKCS1_PADDING
+                    },
+                    buffer
+                );
+            }
+        }
+        keyArr.push(key);
+    }
+    return keyArr
+}
 
 
 
@@ -54,7 +81,7 @@ function EmVecToArr<T>(vec: Vector<T>): T[] {
     return arr;
 }
 
-const pcapFile = getFile("../ignorelol/genshin3.8.pcap");
+const pcapFile = getFile("../ignorelol/3logins4.0gi.pcap");
 // const pcapFile = null;
 const resultFramesFile = "../ignorelol/frames2.json";
 
@@ -106,7 +133,7 @@ async function parsePcap() {
     wg.destroy();
 }
 
-// parsePcap();
+
 const initKeys = Object.fromEntries(getFile("../ysdispatchkeys.bin").toString("utf-8").split("\n").map(x=>x.split(": ")))
 
 // console.log(initKeys)
@@ -132,14 +159,19 @@ function getALargeNumber(obj:object){
         if (v instanceof Long) {
             value = BigInt(v.toString());
         }
-        if (value ?? -1n > 10000000000n) {
-            console.log(value)
-            let key = MTKey.fromSeedSingleSeed(BigInt(value)).keybytes;
-            this.curKey = key;
-        }
     }
     return value
 
+}
+
+function getAllLargeStrings(obj:object){
+    let values  = [];
+    for(let [k,v] of Object.entries(obj)){
+        if(typeof v === "string" && v.length > 100){
+            values.push(v);
+        }
+    }
+    return values;
 }
 
 function xor(buf: Buffer, key: Buffer) {
@@ -152,8 +184,11 @@ function xor(buf: Buffer, key: Buffer) {
 
 
 
-function parseProto(cmdId: number, buf: Buffer) : object{
+function parseProto(cmdId: number, buf: Buffer, homemade: boolean = false) : object{
     
+    if(homemade){
+        return parseProtoBad1(buf);
+    }
     if (YSCmdIds[cmdId] && cmdId != 0) {
         let protoName = YSCmdIds[cmdId];
         try {
@@ -250,13 +285,20 @@ type TrafficPacket = {
 
 
 class TrafficInstance {
-    constructor(public callback: (pack: TrafficPacket) => void) { }
+    constructor(public callback: (pack: TrafficPacket) => void, public RSAKeys: {privateKey : string, decrypt: (b:Buffer)=>Buffer}[]) { }
     clientKcp: Kcp = null!;
     serverKcp: Kcp = null!;
     clientPort = 0;
 
     seq = 0;
 
+    lastPack: object = null!;
+    curKey = initKey;
+
+    curr_ts = 0n;
+    last_rand_key = 0n;
+
+    bruteforcer = new KeyBruteforcer();
     kcpRecv(kcp: Kcp) {
         let size = kcp.peekSize();
         if (size <= 0) return {
@@ -274,11 +316,45 @@ class TrafficInstance {
         };
     }
 
+    reset(){
+        this.clientKcp = null!;
+        this.serverKcp = null!;
+        this.clientPort = 0;
+        this.seq = 0;
+        this.lastPack = null!;
+        this.curKey = initKey;
+        this.curr_ts = 0n;
+        this.last_rand_key = 0n;
+    }
+    processHandshake(data:Buffer, sourceport:number){
+        let magic = data.readUInt32BE(0);
+        let conv = data.readUInt32BE(4);
+        let token = data.readUInt32BE(8);
+        switch (magic) {
+            case 0xFF:
+                this.reset();
+                //connect 
+                this.clientPort = sourceport;
+                console.log("client connect handshake")
+                break;
+            case 0x145:
+                this.clientKcp = new Kcp(conv, token, () => { });
+                this.serverKcp = new Kcp(conv, token, () => { });
+                console.log("kcp created")
+                break;
+            case 0x194:
+                break;
+        }
+    }
+
     processPacket(frame: Buffer) {
         let data = frame;
 
         //cut off 34 bytes of header
-        data = data.subarray(34);
+        // data = data.subarray(34);
+
+        //cut off 20 bytes for a different header (todo maybe figure out the network stack thing automatically)
+        data = data.subarray(20);
         //
         let sourceport = data.readUInt16BE(0);
         let destport = data.readUInt16BE(2);
@@ -286,32 +362,17 @@ class TrafficInstance {
         data = data.subarray(8);
 
         if (data.length == 20) {
-            //hamdshake packet
-            let magic = data.readUInt32BE(0);
-            let conv = data.readUInt32BE(4);
-            let token = data.readUInt32BE(8);
-            switch (magic) {
-                case 0xFF:
-                    //connect 
-                    this.clientPort = sourceport;
-                    console.log("client connect handshake")
-                    break;
-                case 0x145:
-                    this.clientKcp = new Kcp(conv, token, () => { });
-                    this.serverKcp = new Kcp(conv, token, () => { });
-                    console.log("kcp created")
-                    break;
-                case 0x194:
-                    break;
-            }
-            return;
+            return this.processHandshake(data, sourceport);
         }
+            //hamdshake packet
+        
 
         if (!this.clientKcp || !this.serverKcp) {
             //no handshake etc yet, so ignore everything
             return;
         }
-        this.clientPort == sourceport ? this.clientKcp.input(data) : this.serverKcp.input(data);
+
+        const _status = (this.clientPort == sourceport) ? this.clientKcp.input(data) : this.serverKcp.input(data);
 
         let shouldContinue = true;
         while (shouldContinue) {
@@ -338,9 +399,26 @@ class TrafficInstance {
     }
 
 
-    lastPack: object = null!;
 
-    curKey = initKey;
+
+
+
+    attemptToRecoverKey(tokenrsp:object){
+        let strings = getAllLargeStrings(tokenrsp);
+        for(let key of this.RSAKeys){
+            for(let string of strings){
+                try{
+                    //yeah...
+                    let buf = Buffer.from(Buffer.from(string, "base64").toString("utf8"), "base64");
+                    let res = key.decrypt(buf);
+                    return res;
+                }catch(e){
+                    // console.log(e);
+                }
+            }
+        }
+
+    }
 
     parseKcpPacket(buf: Buffer){
         //check magic
@@ -353,34 +431,31 @@ class TrafficInstance {
             //xor
             //key is not default dispatched one anymore
             //try to find key seed (big number in root lvl of object)
-            console.log(`magic was ${magic}`)
-        
-
-            console.log("TODO PLS FINISH")
 
 
-            //find long string that is the rsa encrypted key
-            //the u can bruteforce
-            console.log("i give up :pensive:");
-            console.log(this.lastPack);
-            process.exit(0);
-    
+            let res = this.attemptToRecoverKey(this.lastPack);
 
-            if (false) {
-                //i give up :pensive:
-                
+            let serverRandSeed = res.readBigInt64BE(0);
 
-            } else {
-                // trying new key
-                xored = xor(buf, this.curKey);
-                magic = xored.readUInt32BE(0);
-                if (magic != startMagic) {
-                    console.log("still no magic");
-                    process.exit(0);
-                }
 
+            // 1695405728428n: 6747613285518788750n
+            // 1695405728426 : 6747613285518788750
+            let key = this.bruteforcer.bruteforce(buf, this.curr_ts, serverRandSeed)
+            if(key){
+                this.curKey = key;
+                console.log("found key!");
+            }else{
+                console.log("no key found :(");
+                process.exit(0);
             }
 
+            xored = xor(buf, this.curKey);
+            magic = xored.readUInt16BE(0);
+            if (magic != startMagic) {
+                console.log("still no magic");
+                console.log(magic)
+                process.exit(0);
+            }
         }
 
         let cmdId = xored.readUInt16BE(2);
@@ -388,7 +463,11 @@ class TrafficInstance {
         let dataLen = xored.readUInt32BE(6);
 
         let packetHead = xored.subarray(10, 10 + packetHeaderLen);
+
+        
+
         let packetHeadData = parseProtoBad(packetHead);
+        this.curr_ts = getALargeNumber(packetHeadData) as bigint;
         //the largest nunmber is the timestamp
 
         // console.log(packetHeadData);
@@ -406,9 +485,11 @@ class TrafficInstance {
             process.exit(0);
         }
 
-        let obj = parseProto(cmdId, dataSlice);
+        let obj = parseProto(cmdId, dataSlice,true);
+
 
         this.lastPack = obj;
+        // obj = parseProto(cmdId, dataSlice, false);
         
 
         return {
@@ -425,7 +506,7 @@ class TrafficInstance {
 // /*
 
 async function main1() {
-
+    
     //using a preprocessed json file (from above )
     const frames: Buffer[] = (() => {
         let f = JSON.parse(getFile(resultFramesFile).toString("utf8"));
@@ -433,8 +514,9 @@ async function main1() {
     })()
 
     let traffic = new TrafficInstance((obj: TrafficPacket) => {
-        console.log(`cmdId: ${YSCmdIds[obj.cmdId] ?? obj.cmdId}, obj: ${stringify(obj.obj)}`)
-    });
+        console.log(`got packet w/ cmdId: ${YSCmdIds[obj.cmdId] ?? obj.cmdId}`)
+    }, loadRsaKeys());
+    console.log(frames.length)
     for (let frame of frames) {
         traffic.processPacket(frame);
     }
@@ -443,74 +525,78 @@ async function main1() {
 //smh no typedefs
 //@ts-ignore 
 import * as cap from "cap";
+import { rawListeners } from "process";
+import KeyBruteforcer from "./bf/keybruteforcer";
 
 
 
 async function main2() {
-    let c = new cap.Cap();
-    let device = cap.Cap.findDevice("192.168.11.143");
-    let filter = 'udp port 23301';
-    let buffer = Buffer.alloc(65535);
+    // let c = new cap.Cap();
+    // let device = cap.Cap.findDevice("192.168.11.143");
+    // let filter = 'udp port 23301';
+    // let buffer = Buffer.alloc(65535);
 
-    let linkType = c.open(device, filter, 10 * 1024 * 1024, buffer);
-    c.setMinBytes && c.setMinBytes(0);
-
-
-    let ws = new WebSocketServer({
-        //'ws://127.0.0.1:40510'
-        port: 40510
-    })
-
-    //ping
-    //move sync
-    let ignored = ["PlayerHeartBeatScRsp", "PlayerHeartBeatCsReq", "SceneEntityMoveCsReq", "SceneEntityMoveScRsp"]
-
-    let traffic = new TrafficInstance((obj: TrafficPacket) => {
-        console.log(`seq: ${obj.seq.toString().padStart(5)}, cmdId: ${YSCmdIds[obj.cmdId]}, obj ${stringify(obj.obj)}`)
-
-        if (YSCmdIds[obj.cmdId] && ignored.includes(YSCmdIds[obj.cmdId])) {
-            return;
-        }
-        let iridiumObj = {
-            cmd: "PacketNotify",
-            data: [
-                {
-                    packetID: obj.cmdId,
-                    protoName: YSCmdIds[obj.cmdId],
-                    object: obj.obj,
-                    packet: obj.data.toString("base64"),
-                    source: obj.source == "client" ? 1 : 0,
-                }
-            ]
-        }
-        ws.clients.forEach(x => {
-            x.send(stringify(iridiumObj));
-        });
+    // let linkType = c.open(device, filter, 10 * 1024 * 1024, buffer);
+    // c.setMinBytes && c.setMinBytes(0);
 
 
+    // let ws = new WebSocketServer({
+    //     //'ws://127.0.0.1:40510'
+    //     port: 40510
+    // })
 
-    });
+    // //ping
+    // //move sync
+    // let ignored = ["PlayerHeartBeatScRsp", "PlayerHeartBeatCsReq", "SceneEntityMoveCsReq", "SceneEntityMoveScRsp"]
 
-    c.on('packet', function (nbytes: number, trunc: boolean) {
-        if (linkType === 'ETHERNET') {
-            //clone buf
-            let buf = Buffer.alloc(nbytes);
-            buffer.copy(buf, 0, 0, nbytes);
+    // let traffic = new TrafficInstance((obj: TrafficPacket) => {
+    //     console.log(`seq: ${obj.seq.toString().padStart(5)}, cmdId: ${YSCmdIds[obj.cmdId]}, obj ${stringify(obj.obj)}`)
 
-            traffic.processPacket(buf);
-        } else {
-            console.log('Non-ethernet packet?');
-            console.log(linkType)
-        }
-    })
+    //     if (YSCmdIds[obj.cmdId] && ignored.includes(YSCmdIds[obj.cmdId])) {
+    //         return;
+    //     }
+    //     let iridiumObj = {
+    //         cmd: "PacketNotify",
+    //         data: [
+    //             {
+    //                 packetID: obj.cmdId,
+    //                 protoName: YSCmdIds[obj.cmdId],
+    //                 object: obj.obj,
+    //                 packet: obj.data.toString("base64"),
+    //                 source: obj.source == "client" ? 1 : 0,
+    //             }
+    //         ]
+    //     }
+    //     ws.clients.forEach(x => {
+    //         x.send(stringify(iridiumObj));
+    //     });
+
+
+
+    // });
+
+    // c.on('packet', function (nbytes: number, trunc: boolean) {
+    //     if (linkType === 'ETHERNET') {
+    //         //clone buf
+    //         let buf = Buffer.alloc(nbytes);
+    //         buffer.copy(buf, 0, 0, nbytes);
+
+    //         traffic.processPacket(buf);
+    //     } else {
+    //         console.log('Non-ethernet packet?');
+    //         console.log(linkType)
+    //     }
+    // })
 }
 
 // main2();
 
-main1();
+// main1();
+
+
+export {
+    main1
+}
 
 // */
 
-// export {
-//     main1
-// }

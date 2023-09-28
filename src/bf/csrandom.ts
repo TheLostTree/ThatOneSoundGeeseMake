@@ -10,7 +10,7 @@ export default class Random {
     // process.uptime is not accurate to the Environment.TickCount that the c# one uses
     // so provide a seed otherwise.
     constructor(Seed: number = process.uptime()) {
-        {
+    {
             let ii: number;
             let mj: number, mk: number;
 

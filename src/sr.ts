@@ -54,24 +54,6 @@ function EmVecToArr<T>(vec: Vector<T>): T[] {
 const pcapFile = null;
 const resultFramesFile = "../ignorelol/frames.json";
 
-const buildTestOverrides = () => {
-    return {
-        locateFile: (path: string, prefix: string) => {
-            console.log(`locateFile: path: ${path} prefix: ${prefix}`)
-            if (path.endsWith(".data")) return "node_modules/@goodtools/wiregasm/dist/wiregasm.data";
-            if (path.endsWith(".wasm")) return "node_modules/@goodtools/wiregasm/dist/wiregasm.wasm";
-            return prefix + path;
-        },
-        // supress all unwanted logs in test-suite
-        // eslint-disable-next-line @typescript-eslint/no-empty-function
-        printErr: () => { },
-        // eslint-disable-next-line @typescript-eslint/no-empty-function
-        print: () => { },
-        // eslint-disable-next-line @typescript-eslint/no-empty-function
-        handleStatus: () => { },
-    };
-};
-
 
 async function parsePcap() {
 
@@ -184,9 +166,6 @@ function parseProtoBad(buf: Buffer) {
         }
 
     }
-    
-
-
 }
 
 function parseProtoBad1(buf: Buffer) {
@@ -426,6 +405,7 @@ async function main1() {
         return f.map((x: any) => Buffer.from(x.data_sources[0].data, "base64"));
     })()
 
+    console.log(`${frames.length} frames`)
     let traffic = new TrafficInstance((obj: TrafficPacket) => {
         console.log(`cmdId: ${SRCmdIds[obj.cmdId]}, obj: ${stringify(obj.obj)}`)
     });
