@@ -82,8 +82,10 @@ function EmVecToArr<T>(vec: Vector<T>): T[] {
 }
 
 const pcapFile = getFile("../ignorelol/3logins4.0gi.pcap");
-// const pcapFile = null;
 const resultFramesFile = "../ignorelol/frames2.json";
+
+// const pcapFile = getFile("../ignorelol/genshin3.8.pcap");
+// const resultFramesFile = "../ignorelol/frames3.json";
 
 async function parsePcap() {
 
@@ -129,7 +131,7 @@ async function parsePcap() {
         frames.push(frameObj);
     }
 
-    fs.writeFileSync(resultFramesFile, stringify(frames));
+    fs.writeFileSync(path.join(__dirname, resultFramesFile), stringify(frames));
     wg.destroy();
 }
 
@@ -514,7 +516,9 @@ async function main1() {
     })()
 
     let traffic = new TrafficInstance((obj: TrafficPacket) => {
-        console.log(`got packet w/ cmdId: ${YSCmdIds[obj.cmdId] ?? obj.cmdId}`)
+        console.log(`PACKET cmdId: ${YSCmdIds[obj.cmdId] ?? obj.cmdId} sender : ${obj.source}`)
+
+        console.log(obj.obj)
     }, loadRsaKeys());
     console.log(frames.length)
     for (let frame of frames) {
@@ -595,7 +599,8 @@ async function main2() {
 
 
 export {
-    main1
+    main1,
+    parsePcap
 }
 
 // */
